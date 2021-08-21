@@ -142,6 +142,9 @@ class Source(flink.FlinkPythonProcessor):
         """
         data_meta = execution_context.config['dataset']
         t_env = execution_context.table_env
+        t_env.get_config().get_configuration().set_string("pipeline.classpaths",
+            "file:///root/pravega-connectors-flink-1.11_2.12-0.9.1.jar"
+            )
         t_env.execute_sql('''
             CREATE TABLE predict_source (
                 sl FLOAT,
@@ -150,10 +153,14 @@ class Source(flink.FlinkPythonProcessor):
                 pw FLOAT,
                 type FLOAT
             ) WITH (
-                'connector' = 'filesystem',
-                'path' = '{uri}',
-                'format' = 'csv',
-                'csv.ignore-parse-errors' = 'true'
+                'connector' = 'pravega',
+                'controller-uri' = 'tcp://localhost:9090',
+                'scope' = 'my-scope', 
+                'scan.execution.type' = 'streaming',
+                'scan.event-read.timeout.interval' = '1s',
+                'scan.reader-group.name' = 'group1',
+                'scan.streams' = '{uri}',
+                'format' = 'csv'
             )
         '''.format(uri=data_meta.uri))
         table = t_env.from_path('predict_source')
@@ -202,10 +209,11 @@ class Sink(flink.FlinkPythonProcessor):
            CREATE TABLE predict_sink (
                prediction FLOAT 
            ) WITH (
-               'connector' = 'filesystem',
-               'path' = '{uri}',
-               'format' = 'csv',
-               'csv.ignore-parse-errors' = 'true'
+                'connector' = 'pravega',
+                'controller-uri' = 'tcp://localhost:9090',
+                'scope' = 'my-scope',
+                'sink.stream' = '{uri}',
+                'format' = 'csv'
            )
        '''.format(uri=execution_context.config['dataset'].uri))
         execution_context.statement_set.add_insert("predict_sink", input_list[0])
