@@ -21,7 +21,7 @@ import pandas as pd
 import time
 from typing import List
 from joblib import dump, load
-
+import numpy as np
 import ai_flow as af
 from pyflink.table.udf import udf
 from pyflink.table import Table, ScalarFunction, DataTypes
@@ -29,9 +29,9 @@ from ai_flow.model_center.entity.model_version_stage import ModelVersionStage
 from ai_flow.util.path_util import get_file_dir
 from ai_flow_plugins.job_plugins.python.python_processor import ExecutionContext, PythonProcessor
 from ai_flow_plugins.job_plugins import flink
-from sklearn.neighbors import KNeighborsClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import cross_val_score
 
-EXAMPLE_COLUMNS = ['sl', 'sw', 'pl', 'pw', 'type']
 flink.set_flink_env(flink.FlinkStreamEnv())
 
 
@@ -43,10 +43,10 @@ class DatasetReader(PythonProcessor):
         """
         # Gets the registered dataset meta info
         dataset_meta: af.DatasetMeta = execution_context.config.get('dataset')
-        # Read the file using pandas
-        train_data = pd.read_csv(dataset_meta.uri, header=0, names=EXAMPLE_COLUMNS)
+        # Read the file using numpy
+        train_data = pd.read_csv(dataset_meta.uri, header=0)
         # Prepare dataset
-        y_train = train_data.pop(EXAMPLE_COLUMNS[4])
+        y_train = train_data.pop(0)
         return [[train_data.values, y_train.values]]
 
 
@@ -57,15 +57,14 @@ class ModelTrainer(PythonProcessor):
         Train and save KNN model
         """
         model_meta: af.ModelMeta = execution_context.config.get('model_info')
-        clf = KNeighborsClassifier(n_neighbors=5)
+        clf = LogisticRegression(C=50. / 5000, penalty='l1', solver='saga', tol=0.1)
         x_train, y_train = input_list[0][0], input_list[0][1]
         clf.fit(x_train, y_train)
 
-        # Save model to local
         model_path = get_file_dir(__file__) + '/saved_model'
         if not os.path.exists(model_path):
             os.makedirs(model_path)
-        model_timestamp = time.strftime('%Y_%m_%d_%H_%M_%S', time.localtime())
+        model_timestamp = time.strftime("%Y%m%d%H%M%S", time.localtime())
         model_path = model_path + '/' + model_timestamp
         dump(clf, model_path)
         af.register_model_version(model=model_meta, model_path=model_path)
@@ -79,9 +78,11 @@ class ValidateDatasetReader(PythonProcessor):
         Read test dataset
         """
         dataset_meta: af.DatasetMeta = execution_context.config.get('dataset')
-        x_test = pd.read_csv(dataset_meta.uri, header=0, names=EXAMPLE_COLUMNS)
-        y_test = x_test.pop(EXAMPLE_COLUMNS[4])
-        return [[x_test, y_test]]
+        # Read the file using numpy
+        test_data = pd.read_csv(dataset_meta.uri, header=0)
+        # Prepare dataset
+        y_test = test_data.pop(0)
+        return [[test_data.values, y_test.values]]
 
 
 class ModelValidator(PythonProcessor):
@@ -107,12 +108,13 @@ class ModelValidator(PythonProcessor):
                                     model_version=new_model_meta.version,
                                     current_stage=ModelVersionStage.DEPLOYED)
         else:
-            x_validate = input_list[0][0]
-            y_validate = input_list[0][1]
-            knn = load(new_model_meta.model_path)
-            scores = knn.score(x_validate, y_validate)
-            deployed_knn = load(deployed_model_version.model_path)
-            deployed_scores = deployed_knn.score(x_validate, y_validate)
+
+            x_validate, y_validate = input_list[0][0], input_list[0][1]
+            clf = load(new_model_meta.model_path)
+            scores = cross_val_score(clf, x_validate, y_validate, scoring='precision_macro', cv=5)
+            deployed_clf = load(deployed_model_version.model_path)
+            deployed_scores = cross_val_score(deployed_clf, x_validate, y_validate, scoring='precision_macro')
+
 
             with open(uri, 'a') as f:
                 f.write(
@@ -177,14 +179,13 @@ class Predictor(flink.FlinkPythonProcessor):
         class Predict(ScalarFunction):
             def eval(self, sl, sw, pl, pw):
                 records = [[sl, sw, pl, pw]]
-                df = pd.DataFrame.from_records(records, columns=['sl', 'sw', 'pl', 'pw'])
+                df = pd.DataFrame.from_records(records, columns=['img'])
                 return clf.predict(df)[0]
 
         # Register the udf in flink table env, so we can call it later in SQL statement
-        execution_context.table_env.register_function('mypred',
+        execution_context.table_env.register_function('mypred',-
                                                       udf(f=Predict(),
-                                                          input_types=[DataTypes.FLOAT(), DataTypes.FLOAT(),
-                                                                       DataTypes.FLOAT(), DataTypes.FLOAT()],
+                                                          input_types=[DataTypes.FLOAT() * 2],
                                                           result_type=DataTypes.FLOAT()))
         return [input_list[0].select("mypred(sl,sw,pl,pw)")]
 
