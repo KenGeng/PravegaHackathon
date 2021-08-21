@@ -34,7 +34,7 @@ from sklearn.model_selection import cross_val_score
 
 flink.set_flink_env(flink.FlinkStreamEnv())
 
-
+IMG_COLUMNS = ['label', 'img']
 class DatasetReader(PythonProcessor):
 
     def process(self, execution_context: ExecutionContext, input_list: List) -> List:
@@ -46,7 +46,7 @@ class DatasetReader(PythonProcessor):
         # Read the file using numpy
         train_data = pd.read_csv(dataset_meta.uri, header=0)
         # Prepare dataset
-        y_train = train_data.pop(0)
+        y_train = train_data.pop(IMG_COLUMNS[0])
         return [[train_data.values, y_train.values]]
 
 
@@ -59,6 +59,7 @@ class ModelTrainer(PythonProcessor):
         model_meta: af.ModelMeta = execution_context.config.get('model_info')
         clf = LogisticRegression(C=50. / 5000, penalty='l1', solver='saga', tol=0.1)
         x_train, y_train = input_list[0][0], input_list[0][1]
+        x_train = [[float(j) for j in i.split(' ') ] for i in x_train]
         clf.fit(x_train, y_train)
 
         model_path = get_file_dir(__file__) + '/saved_model'
@@ -81,7 +82,7 @@ class ValidateDatasetReader(PythonProcessor):
         # Read the file using numpy
         test_data = pd.read_csv(dataset_meta.uri, header=0)
         # Prepare dataset
-        y_test = test_data.pop(0)
+        y_test = test_data.pop(IMG_COLUMNS[0])
         return [[test_data.values, y_test.values]]
 
 

@@ -22,3 +22,4 @@ tt = pd.DataFrame()
 tt['label'] = df[0]
 tt['img'] = df['ColumnA']
 print(tt)
+tt.to_csv("mnist_test2.csv", index=False)
