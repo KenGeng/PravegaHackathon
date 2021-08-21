@@ -47,7 +47,7 @@ class DatasetReader(PythonProcessor):
         train_data = pd.read_csv(dataset_meta.uri, header=0)
         # Prepare dataset
         y_train = train_data.pop(IMG_COLUMNS[0])
-        return [[train_data.values, y_train.values]]
+        return [[train_data[IMG_COLUMNS[1]].values, y_train.values]]
 
 
 class ModelTrainer(PythonProcessor):
@@ -57,8 +57,9 @@ class ModelTrainer(PythonProcessor):
         Train and save KNN model
         """
         model_meta: af.ModelMeta = execution_context.config.get('model_info')
-        clf = LogisticRegression(C=50. / 5000, penalty='l1', solver='saga', tol=0.1)
+        clf = LogisticRegression(C=50. / 5000, penalty='l1', solver='saga', tol=1)
         x_train, y_train = input_list[0][0], input_list[0][1]
+        print(x_train)
         x_train = [[float(j) for j in i.split(' ') ] for i in x_train]
         clf.fit(x_train, y_train)
 
@@ -83,7 +84,7 @@ class ValidateDatasetReader(PythonProcessor):
         test_data = pd.read_csv(dataset_meta.uri, header=0)
         # Prepare dataset
         y_test = test_data.pop(IMG_COLUMNS[0])
-        return [[test_data.values, y_test.values]]
+        return [[test_data[IMG_COLUMNS[1]].values, y_test.values]]
 
 
 class ModelValidator(PythonProcessor):
@@ -111,17 +112,18 @@ class ModelValidator(PythonProcessor):
         else:
 
             x_validate, y_validate = input_list[0][0], input_list[0][1]
+            x_validate = [[float(j) for j in i.split(' ')] for i in x_validate]
             clf = load(new_model_meta.model_path)
-            scores = cross_val_score(clf, x_validate, y_validate, scoring='precision_macro', cv=5)
+            scores = cross_val_score(clf, x_validate, y_validate, scoring='precision_macro')[0]
             deployed_clf = load(deployed_model_version.model_path)
-            deployed_scores = cross_val_score(deployed_clf, x_validate, y_validate, scoring='precision_macro')
+            deployed_scores = cross_val_score(deployed_clf, x_validate, y_validate, scoring='precision_macro')[0]
 
 
             with open(uri, 'a') as f:
                 f.write(
                     'deployed model version: {} scores: {}\n'.format(deployed_model_version.version, deployed_scores))
                 f.write('generated model version: {} scores: {}\n'.format(new_model_meta.version, scores))
-            if scores >= deployed_scores:
+            if scores >= deployed_scores - 0.5:
                 # Deprecate current model and deploy better new model
                 af.update_model_version(model_name=current_model_meta.name,
                                         model_version=deployed_model_version.version,
@@ -143,26 +145,31 @@ class Source(flink.FlinkPythonProcessor):
         data_meta = execution_context.config['dataset']
         t_env = execution_context.table_env
         t_env.get_config().get_configuration().set_string("pipeline.classpaths",
-            "file:///root/pravega-connectors-flink-1.11_2.12-0.9.1.jar"
+            "file:///Users/bgeng/Documents/GitHub/PravegaHackathon/pravega-connectors-flink-1.11_2.12-0.9.1.jar"
             )
         t_env.execute_sql('''
             CREATE TABLE predict_source (
-                sl FLOAT,
-                sw FLOAT,
-                pl FLOAT,
-                pw FLOAT,
-                type FLOAT
+                label FLOAT,
+                img STRING
             ) WITH (
                 'connector' = 'pravega',
                 'controller-uri' = 'tcp://localhost:9090',
-                'scope' = 'my-scope', 
+                'scope' = 'demo-scope',
                 'scan.execution.type' = 'streaming',
-                'scan.event-read.timeout.interval' = '1s',
-                'scan.reader-group.name' = 'group1',
-                'scan.streams' = '{uri}',
+                'scan.streams' = 'input-stream',
                 'format' = 'csv'
             )
-        '''.format(uri=data_meta.uri))
+        ''')
+        # t_env.execute_sql('''
+        # CREATE TABLE predict_source (
+        #   label FLOAT,
+        #   img STRING
+        # ) WITH (
+        #   'connector' = 'filesystem',
+        #   'path' = 'file:///Users/bgeng/Documents/GitHub/PravegaHackathon/ai_flow_workflow/resources/mnist_test_2.csv',
+        #   'format' = 'csv'
+        # )
+        # ''')
         table = t_env.from_path('predict_source')
         return [table]
 
@@ -185,17 +192,17 @@ class Predictor(flink.FlinkPythonProcessor):
 
         # Define the python udf
         class Predict(ScalarFunction):
-            def eval(self, sl, sw, pl, pw):
-                records = [[sl, sw, pl, pw]]
-                df = pd.DataFrame.from_records(records, columns=['img'])
-                return clf.predict(df)[0]
+            def eval(self, label, img):
+                records = [[float(j) for j in img.split(' ') ] ]
+                # df = pd.DataFrame.from_records(records, columns=['img'])
+                return clf.predict(records)[0]
 
         # Register the udf in flink table env, so we can call it later in SQL statement
-        execution_context.table_env.register_function('mypred',-
+        execution_context.table_env.register_function('mypred',
                                                       udf(f=Predict(),
-                                                          input_types=[DataTypes.FLOAT() * 2],
+                                                          input_types=[DataTypes.FLOAT(), DataTypes.STRING()],
                                                           result_type=DataTypes.FLOAT()))
-        return [input_list[0].select("mypred(sl,sw,pl,pw)")]
+        return [input_list[0].select("mypred(label, img)")]
 
 
 class Sink(flink.FlinkPythonProcessor):
@@ -205,15 +212,17 @@ class Sink(flink.FlinkPythonProcessor):
         Sink Flink Table produced by Predictor to local file
         """
         table_env = execution_context.table_env
+        table_env.get_config().get_configuration().set_string("pipeline.operator-chaining",
+                                                          "False")
         table_env.execute_sql('''
            CREATE TABLE predict_sink (
                prediction FLOAT 
            ) WITH (
                 'connector' = 'pravega',
                 'controller-uri' = 'tcp://localhost:9090',
-                'scope' = 'my-scope',
-                'sink.stream' = '{uri}',
+                'scope' = 'demo-scope',
+                'sink.stream' = 'output-stream',
                 'format' = 'csv'
            )
-       '''.format(uri=execution_context.config['dataset'].uri))
+       ''')
         execution_context.statement_set.add_insert("predict_sink", input_list[0])

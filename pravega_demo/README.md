@@ -25,7 +25,7 @@ $ ${PRAVEGA_HOME}/bin/pravega-standalone
 $ ${PRAVEGA_HOME}/bin/pravega-cli
 > scope create my-scope
 > stream create my-scope/input-stream
-> stream create my-scope/input-stream
+> stream create my-scope/output-stream
 ```
 
 ### Pravega Flink Connector准备

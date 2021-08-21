@@ -24,7 +24,7 @@ from pravega_processors import DatasetReader, ModelTrainer, ValidateDatasetReade
     Predictor
 
 
-DATASET_URI = os.path.abspath(os.path.join(__file__, "../../../")) + '/resources/iris_{}.csv'
+DATASET_URI = os.path.abspath(os.path.join(__file__, "../../../")) + '/resources/mnist_{}.csv'
 
 
 def run_workflow():
@@ -41,8 +41,8 @@ def run_workflow():
                                              read_dataset_processor=DatasetReader())
 
         # Register model metadata and train model
-        train_model = af.register_model(model_name=artifact_prefix + 'KNN',
-                                        model_desc='KNN model')
+        train_model = af.register_model(model_name=artifact_prefix + 'logistic-regression',
+                                        model_desc='logistic-regression model')
         train_channel = af.train(input=[train_read_dataset],
                                  training_processor=ModelTrainer(),
                                  model_info=train_model)

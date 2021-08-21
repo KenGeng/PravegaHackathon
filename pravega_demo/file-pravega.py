@@ -8,26 +8,28 @@ t_config = TableConfig()
 t_env = StreamTableEnvironment.create(exec_env, t_config)
 
 t_env.get_config().get_configuration().set_string("pipeline.classpaths",
-        "file:///root/pravega-connectors-flink-1.11_2.12-0.9.1.jar"
+        "file:///Users/bgeng/Documents/GitHub/PravegaHackathon/pravega-connectors-flink-1.11_2.12-0.9.1.jar"
         )
         
 t_env.execute_sql('''
 CREATE TABLE input_table (
-  data STRING
+  label FLOAT,
+  img STRING
 ) WITH (
   'connector' = 'filesystem', 
-  'path' = 'file:///root/input_data.txt', 
+  'path' = 'file:///Users/bgeng/Documents/GitHub/PravegaHackathon/ai_flow_workflow/resources/mnist_test_2.csv', 
   'format' = 'csv'
 )
 ''')
 
 t_env.execute_sql('''
 CREATE TABLE output_table (
-    data STRING
+  label FLOAT,
+  img STRING
 ) with (
     'connector' = 'pravega',
     'controller-uri' = 'tcp://localhost:9090',
-    'scope' = 'my-scope',
+    'scope' = 'demo-scope',
     'sink.stream' = 'input-stream',
     'format' = 'csv'
 )
